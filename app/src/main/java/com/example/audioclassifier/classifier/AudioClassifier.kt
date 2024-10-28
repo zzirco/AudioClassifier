@@ -6,12 +6,14 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.OnnxTensor
 import java.nio.FloatBuffer
+import java.io.FileInputStream
 
 class AudioClassifier(private val context: Context) {
     private var ortEnvironment: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
     private val modelPath = "ast_model_with_metadata.onnx"
     private var labels: Map<Int, String> = emptyMap()
+    private var isInitialized = false
 
     companion object {
         private const val TAG = "AudioClassifier"
@@ -19,68 +21,76 @@ class AudioClassifier(private val context: Context) {
 
     init {
         Log.d(TAG, "Initializing AudioClassifier")
-        try {
-            // assets 폴더의 파일 목록 확인
-            context.assets.list("")?.forEach {
-                Log.d(TAG, "Found asset: $it")
-            }
-
-            // 모델 파일 존재 확인
-            try {
-                context.assets.open("ast_model_with_metadata.onnx")
-                Log.d(TAG, "ONNX model file found")
-            } catch (e: Exception) {
-                Log.e(TAG, "ONNX model file not found", e)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in initialization", e)
-        }
+        initializeModel()
     }
 
     private fun initializeModel() {
         try {
-            // ONNX Runtime 환경 초기화
             ortEnvironment = OrtEnvironment.getEnvironment()
+            Log.d(TAG, "OrtEnvironment initialized: $ortEnvironment")
 
-            // 모델 파일을 assets에서 로드
-            val modelBytes = context.assets.open(modelPath).readBytes()
+            // 일반 InputStream으로 모델 파일 읽기
+            context.assets.open(modelPath).use { inputStream ->
+                // 버퍼를 사용하여 모델 파일 읽기
+                val modelBytes = inputStream.readBytes()
+                Log.d(TAG, "Model file loaded, size: ${modelBytes.size}")
 
-            // ONNX 세션 생성
-            ortSession = ortEnvironment?.createSession(modelBytes)
+                // ONNX 세션 생성
+                ortSession = ortEnvironment?.createSession(modelBytes)
+                Log.d(TAG, "OrtSession created successfully")
+            }
 
-            // 라벨 맵 초기화 (메타데이터에서 추출)
-            // 실제 구현에서는 라벨 정보를 적절히 초기화해야 함
+            // 라벨 초기화
+            labels = mapOf(
+                0 to "Background",
+                1 to "Siren"
+            )
+
+            isInitialized = true
+            Log.d(TAG, "Model initialization completed successfully")
         } catch (e: Exception) {
-            Log.e("AudioClassifier", "Error initializing model", e)
+            Log.e(TAG, "Error initializing model", e)
+            isInitialized = false
+            throw RuntimeException("Failed to initialize audio classifier", e)
         }
     }
 
     fun classify(audioData: FloatArray): String {
+        if (!isInitialized || ortEnvironment == null || ortSession == null) {
+            Log.e(TAG, "Classifier not properly initialized")
+            return "Error: Classifier not initialized"
+        }
+
         try {
-            // 오디오 데이터 전처리
+            val shape = longArrayOf(1, 1, audioData.size.toLong())
+
             val inputTensor = OnnxTensor.createTensor(
                 ortEnvironment,
                 FloatBuffer.wrap(audioData),
-                longArrayOf(1, 1, audioData.size.toLong())
+                shape
             )
 
-            // 추론 실행
             val inputs = mapOf("input" to inputTensor)
             val output = ortSession?.run(inputs)
 
-            // 결과 처리
             val outputArray = (output?.get(0)?.value as Array<FloatArray>)[0]
             val maxIndex = outputArray.indices.maxByOrNull { outputArray[it] } ?: 0
 
             return labels[maxIndex] ?: "Unknown"
         } catch (e: Exception) {
-            Log.e("AudioClassifier", "Error during classification", e)
-            return "Error"
+            Log.e(TAG, "Error during classification", e)
+            return "Error: ${e.message}"
         }
     }
 
     fun close() {
-        ortSession?.close()
-        ortEnvironment?.close()
+        try {
+            ortSession?.close()
+            ortEnvironment?.close()
+            isInitialized = false
+            Log.d(TAG, "Resources closed successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing resources", e)
+        }
     }
 }

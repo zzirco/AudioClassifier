@@ -18,6 +18,9 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // 힙 메모리 증가
+        manifestPlaceholders["isLargeHeap"] = true
     }
 
     buildTypes {
@@ -43,10 +46,15 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        // 큰 파일 처리를 위한 설정
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
 dependencies {
+    // 기존 dependencies 유지
     // Android Core Libraries
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")

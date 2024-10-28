@@ -19,11 +19,16 @@ import com.example.audioclassifier.R
 import com.example.audioclassifier.classifier.AudioClassifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 class AudioClassificationService : Service() {
     companion object {
         private const val TAG = "AudioService"
+        private const val NOTIFICATION_ID = 1
+        private const val CHANNEL_ID = "AUDIO_CHANNEL"
+        private const val BUFFER_SIZE = 1024 * 128  // 여기에 추가
     }
 
     private var audioRecord: AudioRecord? = null
@@ -34,13 +39,35 @@ class AudioClassificationService : Service() {
         super.onCreate()
         Log.d(TAG, "Service onCreate started")
         try {
-            classifier = AudioClassifier(this)
-            Log.d(TAG, "AudioClassifier initialized successfully")
             createNotificationChannel()
+            startForeground()  // Foreground 서비스 시작
+            initializeClassifier()
             Log.d(TAG, "Service onCreate completed")
         } catch (e: Exception) {
             Log.e(TAG, "Error in onCreate: ${e.message}", e)
+            stopSelf()  // 초기화 실패시 서비스 종료
         }
+    }
+
+    private fun initializeClassifier() {
+        try {
+            classifier = AudioClassifier(this)
+            Log.d(TAG, "AudioClassifier initialized successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize AudioClassifier", e)
+            throw e  // 상위로 예외 전파
+        }
+    }
+
+    private fun startForeground() {
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Audio Classification Service")
+            .setContentText("Listening for sounds...")
+            .setSmallIcon(R.drawable.ic_notification)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+
+        startForeground(NOTIFICATION_ID, notification)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -50,6 +77,7 @@ class AudioClassificationService : Service() {
             startAudioRecording()
         } else {
             Log.e(TAG, "Required permissions are not granted")
+            stopSelf()
         }
         return START_STICKY
     }
@@ -83,7 +111,7 @@ class AudioClassificationService : Service() {
                 16000,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_FLOAT,
-                bufferSize
+                BUFFER_SIZE
             ).apply {
                 if (state != AudioRecord.STATE_INITIALIZED) {
                     Log.e(TAG, "AudioRecord failed to initialize, current state: $state")
@@ -92,7 +120,7 @@ class AudioClassificationService : Service() {
                 Log.d(TAG, "AudioRecord successfully initialized")
             }
 
-            val audioBuffer = FloatArray(bufferSize)
+            val audioBuffer = FloatArray(BUFFER_SIZE)
             isRecording = true
             audioRecord?.startRecording()
             Log.d(TAG, "Audio recording started successfully")
@@ -140,15 +168,18 @@ class AudioClassificationService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
                 val channel = NotificationChannel(
-                    "AUDIO_CHANNEL",
+                    CHANNEL_ID,
                     "Audio Classifications",
                     NotificationManager.IMPORTANCE_DEFAULT
-                )
+                ).apply {
+                    description = "Audio classification notifications"
+                }
                 val notificationManager = getSystemService(NotificationManager::class.java)
                 notificationManager?.createNotificationChannel(channel)
                 Log.d(TAG, "Notification channel created successfully")
             } catch (e: Exception) {
                 Log.e(TAG, "Error creating notification channel: ${e.message}", e)
+                throw e
             }
         }
     }
@@ -156,22 +187,24 @@ class AudioClassificationService : Service() {
     private fun showNotification(classification: String) {
         Log.d(TAG, "Attempting to show notification for: $classification")
         try {
-            val notification = NotificationCompat.Builder(this, "AUDIO_CHANNEL")
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Sound Detected")
                 .setContentText("Detected sound: $classification")
                 .setSmallIcon(R.drawable.ic_notification)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .build()
 
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    android.Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED
-            ) {
-                NotificationManagerCompat.from(this).notify(1, notification)
-                Log.d(TAG, "Notification shown successfully")
-            } else {
-                Log.w(TAG, "Notification permission not granted")
+            NotificationManagerCompat.from(this).apply {
+                if (ContextCompat.checkSelfPermission(
+                        this@AudioClassificationService,
+                        Manifest.permission.POST_NOTIFICATIONS
+                    ) == PackageManager.PERMISSION_GRANTED
+                ) {
+                    notify(NOTIFICATION_ID + 1, notification)  // 기존 notification과 다른 ID 사용
+                    Log.d(TAG, "Notification shown successfully")
+                } else {
+                    Log.w(TAG, "Notification permission not granted")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error showing notification: ${e.message}", e)
@@ -183,13 +216,25 @@ class AudioClassificationService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "Service onDestroy called")
         try {
-            isRecording = false
-            audioRecord?.stop()
-            Log.d(TAG, "Audio recording stopped")
-            audioRecord?.release()
-            Log.d(TAG, "Audio recorder released")
+            isRecording = false  // 먼저 녹음 플래그를 false로 설정
+
+            // 코루틴이 완전히 종료될 때까지 기다림
+            runBlocking {
+                delay(100)  // 코루틴이 안전하게 종료되도록 잠시 대기
+            }
+
+            // 그 다음 AudioRecord 해제
+            audioRecord?.apply {
+                stop()
+                Log.d(TAG, "Audio recording stopped")
+                release()
+                Log.d(TAG, "Audio recorder released")
+            }
+
+            // 마지막으로 classifier 해제
             classifier.close()
             Log.d(TAG, "Classifier closed")
+
             super.onDestroy()
             Log.d(TAG, "Service destroyed successfully")
         } catch (e: Exception) {

@@ -42,7 +42,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun requestPermissions() {
         Log.d(TAG, "Requesting permissions")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (Build.VERSION.SDK_INT >= 34) {
             // Android 13 이상
             val requiredPermissions = arrayOf(
                 Manifest.permission.RECORD_AUDIO,
